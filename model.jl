@@ -1,7 +1,8 @@
 module SwarmModel
 
-using Random
-using JSON
+using Random, JSON
+
+export compute_step, apply_step, load_swarm
 
 const POS_X = 1
 const POS_Y = 2
@@ -53,7 +54,7 @@ end
 function mk_swarm(xs, ys; goal=[0. 0.])
     n = length(xs)
     b = zeros((n,N_COLS))
-    b[:,POS_X] = xs 
+    b[:,POS_X] = xs
     b[:,POS_Y] = ys
     b[:,GOAL_X:GOAL_Y] .= goal
     return b
@@ -68,7 +69,7 @@ function all_pairs_mag(b::Matrix{Float64}, cb::Float64)
     for j in 1:n_agents
         xv[j,j] = 0.
         yv[j,j] = 0.
-        mag[j,j] = cb + 1. # ensure no agent is a cohesion neighbour of itself
+        mag[j,j] = Inf # ensure no agent is a cohesion neighbour of itself
         for i in (j+1):n_agents
             xv[i,j] = b[i,POS_X] - b[j,POS_X]
             yv[i,j] = b[i,POS_Y] - b[j,POS_Y]
@@ -174,7 +175,7 @@ function update_resultant(b, stability_factor, speed)
     end
 end
 
-function compute_step(b; scaling="linear",exp_rate=0.2,speed=0.05,perim_coord=false,stability_factor=0.,cb=3.0, rb=Array{Float64,2}([2. 2.; 2. 2.]),kc=Array{Float64,2}([0.15 0.15; 0.15 0.15]),kr=Array{Float64,2}([50. 50.; 50. 50.]),kd=0.,kg=0.,rgf=false)
+function compute_step(b; scaling="linear",exp_rate=0.2,speed=0.05,perim_coord=false,stability_factor=0.,cb=3.0, rb=Array{Float64,2}([2. 2.; 2. 2.]),kc=Array{Float64,2}([0.15 0.15; 0.15 0.15]),kr=Array{Float64,2}([50. 50.; 50. 50.]),kd=0.,kg=0.,rgf=false, gain=nothing)
     n_agents = size(b)[1]
     xv,yv,mag = all_pairs_mag(b, cb)
 
@@ -194,9 +195,13 @@ function compute_step(b; scaling="linear",exp_rate=0.2,speed=0.05,perim_coord=fa
         b[:,DIR_X:DIR_Y] .*= b[:,PRM]
     end
     b[:,RES_X:RES_Y] = b[:,COH_X:COH_Y] .+ b[:,GAP_X:GAP_Y] .+ b[:,REP_X:REP_Y] .+ b[:,DIR_X:DIR_Y]
-    # normalise the resultant and update for speed, adjusted for stability
-    update_resultant(b, stability_factor, speed)
-
+    if gain === nothing
+        # normalise the resultant and update for speed, adjusted for stability
+        update_resultant(b, stability_factor, speed)
+    else
+        # scale by the gain
+        b[:,RES_X:RES_Y] .*= gain
+    end
     return xv,yv,mag,p
 end
 
