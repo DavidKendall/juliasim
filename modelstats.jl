@@ -8,8 +8,9 @@ using .SwarmModel
 
 export plot_mean_distances, knn_mean_distances, knn_d
 
-function agent_perimeter_status(config_file="config/base_400.json"; n_steps=500, boundary=50)
+function agent_perimeter_status(config_file="config/base_400.json"; n_steps=500, boundary=50, gain=nothing)
     b, parameters = load_swarm(config_file)
+		parameters[:gain] = gain
     n_agents = size(b)[1]
     accum = zeros(n_steps, n_agents)
     for i in 1:n_steps
@@ -72,11 +73,9 @@ end
 function plot_mean_distances(config_file="config/base_400.json"; means=nothing, stds=nothing, n_steps=500, plots=[:ii, :pi, :pp], k=[2,1,1,2], pre_p=false, boundary=50, with_stdev=false, legend=:best, ax_min_max=nothing, saved_figure=nothing, gain=nothing)
     n_plots = length(plots)
     b, parameters = load_swarm(config_file)
-    if gain !== nothing
-        parameters[:gain] = gain
-    end
+    parameters[:gain] = gain
     if pre_p
-        p = agent_perimeter_status(config_file, n_steps=n_steps, boundary=boundary)
+        p = agent_perimeter_status(config_file, n_steps=n_steps, boundary=boundary, gain=gain)
     else
         p = nothing
     end
