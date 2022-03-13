@@ -37,7 +37,8 @@ Dict(
      :speed => 0.05,
      :stability_factor => 0.0,
      :perim_coord => false,
-     :rgf => false
+     :rgf => false,
+     :gain => nothing
     )
 
 function mk_rand_swarm(n; goal=[0. 0.], loc=0., grid=10., seed=nothing)

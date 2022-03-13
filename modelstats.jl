@@ -8,17 +8,28 @@ using .SwarmModel
 
 export plot_mean_distances, knn_mean_distances, knn_d
 
-function agent_perimeter_status(config_file="config/base_400.json"; n_steps=500, boundary=50, gain=nothing)
-    b, parameters = load_swarm(config_file)
-		parameters[:gain] = gain
+#function agent_perimeter_status(config_file="./config/base_400.json"; n_steps=500, boundary=50)
+#b, parameters = load_swarm(config_file)
+#n_agents = size(b)[1]
+#accum = zeros(n_agents, n_steps)
+#for i in 1:n_steps
+#compute_step(b; parameters...)
+#accum[:, i] .= b[:, SM.PRM]
+#apply_step(b)
+#end
+#return vec(Int.((sum(accum, dims=2) ./ n_steps .* 100.0) .> boundary) .+ 1)
+#end
+
+function agent_perimeter_status(b, parameters; n_steps=500, boundary=50)
     n_agents = size(b)[1]
-    accum = zeros(n_steps, n_agents)
+    accum = zeros(n_agents, n_steps)
+    b_, parameters_ = deepcopy(b), deepcopy(parameters)
     for i in 1:n_steps
-        compute_step(b; parameters...)
-        accum[i, :] .= b[:, SM.PRM]
-        apply_step(b)
+        compute_step(b_; parameters_...)
+        accum[:, i] .= b_[:, SM.PRM]
+        apply_step(b_)
     end
-    return Int.((sum(accum, dims=1) ./ n_steps .* 100.0) .> boundary) .+ 1
+    return vec(Int.((sum(accum, dims=2) ./ n_steps .* 100.0) .> boundary) .+ 1)
 end
 
 function knn_d(k, mag, cb, p, perim_pair, nbr_mag)
@@ -41,12 +52,11 @@ function knn_d(k, mag, cb, p, perim_pair, nbr_mag)
     return mean(nbr_mag[not_zero]), std(nbr_mag[not_zero])
 end
 
-function knn_mean_distances(b, parameters; n_steps=500, class_ids=[:ii, :pi, :pp], k=[2,1,1,2], perimeter=nothing, boundary=50)
-    cb = parameters[:cb]
+function knn_mean_distances(b, parameters; n_steps=500, class_ids=[:ii, :pi, :pp], k=[2,1,1,2], perimeter=nothing)
     n_agents = size(b)[1]
-    n_classes = length(class_ids)
     id_to_int = Dict(:ii => 1, :ip => 2, :pi => 3, :pp => 4)
     id_to_perim_pair = Dict(:ii => (1, 1), :ip => (1, 2), :pi => (2, 1), :pp => (2, 2))
+    n_classes = length(class_ids)
     means = Array{Float64}(undef, n_steps, n_classes)
     stds = Array{Float64}(undef, n_steps, n_classes)
     for i in 1:n_steps
@@ -61,7 +71,7 @@ function knn_mean_distances(b, parameters; n_steps=500, class_ids=[:ii, :pi, :pp
             cn += 1
             cl = id_to_int[c]
             pp = id_to_perim_pair[c]
-            m, s = knn_d(k[cl], mag, cb, p, pp, nbr_mag)
+            m, s = knn_d(k[cl], mag, parameters[:cb], p, pp, nbr_mag)
             means[i, cn] = m
             stds[i, cn] = s
         end
@@ -70,21 +80,20 @@ function knn_mean_distances(b, parameters; n_steps=500, class_ids=[:ii, :pi, :pp
     return means, stds
 end
 
-function plot_mean_distances(config_file="config/base_400.json"; means=nothing, stds=nothing, n_steps=500, plots=[:ii, :pi, :pp], k=[2,1,1,2], pre_p=false, boundary=50, with_stdev=false, legend=:best, ax_min_max=nothing, saved_figure=nothing, gain=nothing)
-    n_plots = length(plots)
+function plot_mean_distances(config_file="config/base_400.json"; means=nothing, stds=nothing, n_steps=500, plots=[:ii, :pi, :pp], k=[2,1,1,2], pre_p=false, boundary=50, with_stdev=false, legend=:best, ax_min_max=nothing, saved_figure=false, overrides=nothing)
     b, parameters = load_swarm(config_file)
-    parameters[:gain] = gain
+    parameters = overrides === nothing ? parameters : merge(parameters, overrides)
     if pre_p
-        p = agent_perimeter_status(config_file, n_steps=n_steps, boundary=boundary, gain=gain)
+        p = agent_perimeter_status(b, parameters, n_steps=n_steps, boundary=boundary)
     else
         p = nothing
     end
     if means === nothing
-        means, stds = knn_mean_distances(b, parameters, n_steps=n_steps,
-                                         class_ids=plots, k=k, perimeter=p, boundary=boundary)
+        means, stds = knn_mean_distances(b, parameters, n_steps=n_steps, class_ids=plots, k=k, perimeter=p)
     end
     ptype = with_stdev ? "\\Psi_d" : "\\mu_d"
-    title = "Distance metric by perimeter class - $(splitext(basename(config_file))[1])\n $(stringify_parameters(parameters))"
+    file_basename = splitext(basename(config_file))[1]
+    title = "Distance metric by perimeter class - $(file_basename)\n $(stringify_parameters(parameters))"
     labels = Dict(:ii => "\$$(ptype)(S_i, S_i, $(k[1]))\$",
                   :ip => "\$$(ptype)(S_i, S_p, $(k[2]))\$",
                   :pi => "\$$(ptype)(S_p, S_i, $(k[3]))\$",
@@ -92,23 +101,26 @@ function plot_mean_distances(config_file="config/base_400.json"; means=nothing, 
     colors = Dict(:ii => "black", :ip => "green", :pi => "blue", :pp => "red")
     ribbons = [with_stdev ? stds[:, i] : nothing for i in 1:length(plots)]
     plt = plot(plot_title=title, plot_titlefontsize=10, xlabel="Simulation step number", ylabel="$(ptype)")
-    for i in 1:n_plots
+    for i in 1:length(plots)
         p = plots[i]
         plot!(plt, means[:, i], ribbon=ribbons[i], color=colors[p], fillalpha=0.25, label=labels[p], legend=legend)
+    end
+    if saved_figure
+        savefig(plt, "$(file_basename).pdf")
     end
     display(plt)
 end
 
 function stringify_parameters(params)
     pns = Dict(:cb => "C:", :rb => "R:", :kc => "kc:", :kr => "kr:",
-               :kg => "kg:", :rgf => "rgf:"
+               :kg => "kg:", :rgf => "rgf:", :gain => "gain:"
               )
     trl = Dict(:cb => "", :rb => "\n", :kc => "\n", :kr => "\n",
-               :kg => "", :rgf => ""
+               :kg => "", :rgf => "", :gain => ""
               )
     result = ""
-    for n in [:cb, :rb, :kc, :kr, :kg, :rgf]
-        if params[n] != SM.default_swarm_params[n]
+    for n in [:cb, :rb, :kc, :kr, :kg, :rgf, :gain]
+        if get(params, n, nothing) != SM.default_swarm_params[n]
             result *= "$(pns[n]) $(params[n]) $(trl[n])"
         end
     end
