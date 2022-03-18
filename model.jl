@@ -12,17 +12,19 @@ const REP_X = 5
 const REP_Y = 6
 const DIR_X = 7
 const DIR_Y = 8
-const RES_X = 9
-const RES_Y = 10
-const GOAL_X = 11
-const GOAL_Y = 12
-const PRM = 13
-const GAP_X = 14
-const GAP_Y = 15
-const COH_N = 16
-const REP_N = 17
-const DEBUG = 18
-const N_COLS = 18
+const ADV_X = 9
+const ADV_Y = 10
+const RES_X = 11
+const RES_Y = 12
+const GOAL_X = 13
+const GOAL_Y = 14
+const PRM = 15
+const GAP_X = 16
+const GAP_Y = 17
+const COH_N = 18
+const REP_N = 19
+const DEBUG = 20
+const N_COLS = 20
 
 const default_swarm_params =
 Dict(
@@ -30,13 +32,13 @@ Dict(
      :rb => [2.0 2.0; 2.0 2.0],
      :kc => [0.15 0.15; 0.15 0.15],
      :kr => [50.0 50.0; 50.0 50.0],
-     :kd => 0.0,
+     :kd => [0.0, 0.0],
+     :ka => [0.0, 0.0],
      :kg => 0.0,
      :scaling => "linear",
      :exp_rate => 0.2,
      :speed => 0.05,
      :stability_factor => 0.0,
-     :perim_coord => false,
      :rgf => false,
      :gain => nothing
     )
@@ -87,36 +89,6 @@ function all_pairs_mag(b::Matrix{Float64}, cb::Float64)
     return xv, yv, mag
 end
 
-function compute_coh(b,xv,yv,mag,cb,kc,p)
-    n_agents = size(b)[1]
-    Threads.@threads for i in 1:n_agents
-        b[i,COH_X] = 0.
-        b[i,COH_Y] = 0.
-        for j in 1:n_agents
-            if mag[j,i] ≤ cb
-                b[i, COH_X] += xv[j,i] * kc[p[i],p[j]]
-                b[i, COH_Y] += yv[j,i] * kc[p[i],p[j]]
-            end
-        end
-    end
-end
-
-function compute_rep_linear(b,xv,yv,mag,rb,kr,p)
-    n_agents = size(b)[1]
-    Threads.@threads for i in 1:n_agents
-        b[i,REP_N] = 0.0
-        b[i,REP_X] = 0.0
-        b[i,REP_Y] = 0.0
-        for j in 1:n_agents
-            if mag[j, i] <= rb[p[i],p[j]] # assume mag[j,j] == cb + 1. > rb[x,y] for all x, y
-                b[i,REP_N] = b[i,REP_N] + 1
-                b[i,REP_X] = b[i,REP_X] + (1. - (rb[p[i],p[j]] / mag[j,i])) * xv[j,i] * kr[p[i],p[j]]
-                b[i,REP_Y] = b[i,REP_Y] + (1. - (rb[p[i],p[j]] / mag[j,i])) * yv[j,i] * kr[p[i],p[j]]
-            end
-        end
-    end
-end
-
 function on_perim(b,xv,yv,mag,cb,kg,rgf)
     n_agents = size(b)[1]
     b[:,PRM] .= 0. # b[i,PRM] will be either 0 or 1 and can act as a boolean
@@ -162,6 +134,52 @@ function on_perim(b,xv,yv,mag,cb,kg,rgf)
     return p
 end
 
+function compute_coh(b,xv,yv,mag,cb,kc,p)
+    n_agents = size(b)[1]
+    Threads.@threads for i in 1:n_agents
+        b[i,COH_X] = 0.
+        b[i,COH_Y] = 0.
+        for j in 1:n_agents
+            if mag[j,i] ≤ cb
+                b[i, COH_X] += xv[j,i] * kc[p[i],p[j]]
+                b[i, COH_Y] += yv[j,i] * kc[p[i],p[j]]
+            end
+        end
+    end
+end
+
+function compute_rep_linear(b,xv,yv,mag,rb,kr,p)
+    n_agents = size(b)[1]
+    Threads.@threads for i in 1:n_agents
+        b[i,REP_N] = 0.0
+        b[i,REP_X] = 0.0
+        b[i,REP_Y] = 0.0
+        for j in 1:n_agents
+            if mag[j, i] <= rb[p[i],p[j]] # assume mag[j,j] == cb + 1. > rb[x,y] for all x, y
+                b[i,REP_N] = b[i,REP_N] + 1
+                b[i,REP_X] = b[i,REP_X] + (1. - (rb[p[i],p[j]] / mag[j,i])) * xv[j,i] * kr[p[i],p[j]]
+                b[i,REP_Y] = b[i,REP_Y] + (1. - (rb[p[i],p[j]] / mag[j,i])) * yv[j,i] * kr[p[i],p[j]]
+            end
+        end
+    end
+end
+
+function compute_dir(b,kd,p)
+    n_agents = size(b)[1]
+    b[:,DIR_X:DIR_Y] .= 0.
+    Threads.@threads for i in 1:n_agents
+        b[i, DIR_X:DIR_Y] .+= kd[p[i]] .* (b[i, GOAL_X:GOAL_Y] .- b[i, POS_X:POS_Y])
+    end
+end
+
+function compute_adv(b, ka, p, α)
+    n_agents = size(b)[1]
+    Threads.@threads for i in 1:n_agents
+        b[i, ADV_X] = ka[p[i]] * (cos(α) * b[i, DIR_X] - sin(α) * b[i, DIR_Y])
+        b[i, ADV_Y] = ka[p[i]] * (sin(α) * b[i, DIR_X] + cos(α) * b[i, DIR_Y])
+    end
+end
+
 function update_resultant(b, stability_factor, speed)
     n_agents = size(b)[1]
     for i in 1:n_agents
@@ -176,7 +194,7 @@ function update_resultant(b, stability_factor, speed)
     end
 end
 
-function compute_step(b; scaling="linear",exp_rate=0.2,speed=0.05,perim_coord=false,stability_factor=0.,cb=3.0, rb=Array{Float64,2}([2. 2.; 2. 2.]),kc=Array{Float64,2}([0.15 0.15; 0.15 0.15]),kr=Array{Float64,2}([50. 50.; 50. 50.]),kd=0.,kg=0.,rgf=false, gain=nothing)
+function compute_step(b; scaling="linear",exp_rate=0.2,speed=0.05,stability_factor=0.,cb=3.0, rb=Array{Float64,2}([2. 2.; 2. 2.]),kc=Array{Float64,2}([0.15 0.15; 0.15 0.15]),kr=Array{Float64,2}([50. 50.; 50. 50.]),kd=[0., 0.], ka=[0., 0.],kg=0.,rgf=false,gain=nothing)
     n_agents = size(b)[1]
     xv,yv,mag = all_pairs_mag(b, cb)
 
@@ -189,13 +207,16 @@ function compute_step(b; scaling="linear",exp_rate=0.2,speed=0.05,perim_coord=fa
     b[:,REP_X:REP_Y] ./= max.(b[:,REP_N], 1.)
 
     # compute the direction vectors
-    b[:,DIR_X:DIR_Y] = kd .* (b[:,GOAL_X:GOAL_Y] .- b[:,POS_X:POS_Y])
+    #b[:,DIR_X:DIR_Y] = kd .* (b[:,GOAL_X:GOAL_Y] .- b[:,POS_X:POS_Y])
+    compute_dir(b, kd, p)
+
+    #compute the adversarial vector
+    compute_adv(b, ka, p, π/2)
 
     # compute the resultant of the cohesion, repulsion and direction vectors
-    if perim_coord
-        b[:,DIR_X:DIR_Y] .*= b[:,PRM]
-    end
-    b[:,RES_X:RES_Y] = b[:,COH_X:COH_Y] .+ b[:,GAP_X:GAP_Y] .+ b[:,REP_X:REP_Y] .+ b[:,DIR_X:DIR_Y]
+    b[:,RES_X:RES_Y] = b[:,COH_X:COH_Y] .+ b[:,GAP_X:GAP_Y] .+ b[:,REP_X:REP_Y] .+ b[:,DIR_X:DIR_Y] .+ b[:,ADV_X:ADV_Y]
+
+    # either scale or normalise resultant
     if gain === nothing
         # normalise the resultant and update for speed, adjusted for stability
         update_resultant(b, stability_factor, speed)
@@ -221,12 +242,18 @@ end
 function load_swarm(path="swarm.json")
     state = JSON.parsefile(path)
     b = mk_swarm(state["agents"]["coords"][1], state["agents"]["coords"][2])
-    params = state["params"]
-    params = Dict(collect(zip(map(Symbol, collect(keys(params))), values(params))))
-    params[:rb] = transpose(reshape(collect(Iterators.flatten(params[:rb])), (2,2)))
-    params[:kc] = transpose(reshape(collect(Iterators.flatten(params[:kc])), (2,2)))
-    params[:kr] = transpose(reshape(collect(Iterators.flatten(params[:kr])), (2,2)))
-    return b, params
+    parameters = state["params"]
+    parameters = Dict(collect(zip(map(Symbol, collect(keys(parameters))), values(parameters))))
+    # Convert from Vector{Any} to Vector{Float64}
+    parameters[:ka] = map(Float64, parameters[:ka])
+    parameters[:kd] = map(Float64, parameters[:kd])
+    # Convert from JSON's row-major format to Julia's column-major format
+    let reformat(m) = collect(transpose(reshape(collect(Iterators.flatten(m)), 2, 2)))
+        parameters[:rb] = reformat(parameters[:rb])
+        parameters[:kc] = reformat(parameters[:kc])
+        parameters[:kr] = reformat(parameters[:kr])
+    end
+    return b, parameters
 end
 
 end # module
