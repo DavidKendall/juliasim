@@ -1,24 +1,12 @@
 module ModelStats
 
-using Statistics, Plots
+using Statistics
 
 include("model.jl")
 import .SwarmModel as SM
 using .SwarmModel
 
-export plot_mean_distances, knn_mean_distances, knn_d
-
-#function agent_perimeter_status(config_file="./config/base_400.json"; n_steps=500, boundary=50)
-#b, parameters = load_swarm(config_file)
-#n_agents = size(b)[1]
-#accum = zeros(n_agents, n_steps)
-#for i in 1:n_steps
-#compute_step(b; parameters...)
-#accum[:, i] .= b[:, SM.PRM]
-#apply_step(b)
-#end
-#return vec(Int.((sum(accum, dims=2) ./ n_steps .* 100.0) .> boundary) .+ 1)
-#end
+export knn_mean_distances, knn_d
 
 function agent_perimeter_status(b, parameters; n_steps=500, boundary=50)
     n_agents = size(b)[1]
@@ -52,14 +40,17 @@ function knn_d(k, mag, cb, p, perim_pair, nbr_mag)
     return mean(nbr_mag[not_zero]), std(nbr_mag[not_zero])
 end
 
-function knn_mean_distances(b, parameters; n_steps=500, class_ids=[:ii, :pi, :pp], k=[2,1,1,2], perimeter=nothing)
-    n_agents = size(b)[1]
+function knn_mean_distances(b, parameters; n_steps=500, class_ids=[:ii, :pi, :pp], k=[2,1,1,2], perimeter=nothing, failure=nothing)
     id_to_int = Dict(:ii => 1, :ip => 2, :pi => 3, :pp => 4)
     id_to_perim_pair = Dict(:ii => (1, 1), :ip => (1, 2), :pi => (2, 1), :pp => (2, 2))
     n_classes = length(class_ids)
     means = Array{Float64}(undef, n_steps, n_classes)
     stds = Array{Float64}(undef, n_steps, n_classes)
+    if failure !== nothing
+        f_step, failed = failure
+    end
     for i in 1:n_steps
+        n_agents = size(b)[1]
         xv, yv, mag, p = compute_step(b; parameters...)
         if perimeter !== nothing
             p = perimeter
@@ -76,55 +67,30 @@ function knn_mean_distances(b, parameters; n_steps=500, class_ids=[:ii, :pi, :pp
             stds[i, cn] = s
         end
         apply_step(b)
+        if failure != nothing && i == f_step
+            b_ = [b[a,:] for a in 1:n_agents if a ∉ failed]
+            b = collect(transpose(reshape(collect(Iterators.flatten(b_)),(SM.N_COLS, n_agents - length(failed)))))
+        end
     end
     return means, stds
 end
 
-function plot_mean_distances(config_file="config/base_400.json"; means=nothing, stds=nothing, n_steps=500, plots=[:ii, :pi, :pp], k=[2,1,1,2], pre_p=false, boundary=50, with_stdev=false, legend=:best, ax_min_max=nothing, saved_figure=false, overrides=nothing)
-    b, parameters = load_swarm(config_file)
-    parameters = overrides === nothing ? parameters : merge(parameters, overrides)
-    if pre_p
-        p = agent_perimeter_status(b, parameters, n_steps=n_steps, boundary=boundary)
-    else
-        p = nothing
-    end
-    if means === nothing
-        means, stds = knn_mean_distances(b, parameters, n_steps=n_steps, class_ids=plots, k=k, perimeter=p)
-    end
-    ptype = with_stdev ? "\\Psi_d" : "\\mu_d"
-    file_basename = splitext(basename(config_file))[1]
-    title = "Distance metric by perimeter class - $(file_basename)\n $(stringify_parameters(parameters))"
-    labels = Dict(:ii => "\$$(ptype)(S_i, S_i, $(k[1]))\$",
-                  :ip => "\$$(ptype)(S_i, S_p, $(k[2]))\$",
-                  :pi => "\$$(ptype)(S_p, S_i, $(k[3]))\$",
-                  :pp => "\$$(ptype)(S_p, S_p, $(k[4]))\$")
-    colors = Dict(:ii => "black", :ip => "green", :pi => "blue", :pp => "red")
-    ribbons = [with_stdev ? stds[:, i] : nothing for i in 1:length(plots)]
-    plt = plot(plot_title=title, plot_titlefontsize=10, xlabel="Simulation step number", ylabel="$(ptype)")
-    for i in 1:length(plots)
-        p = plots[i]
-        plot!(plt, means[:, i], ribbon=ribbons[i], color=colors[p], fillalpha=0.25, label=labels[p], legend=legend)
-    end
-    if saved_figure
-        savefig(plt, "$(file_basename).pdf")
-    end
-    display(plt)
+function centroid(b)
+    return mean(b[:,SM.POS_X]), mean(b[:,SM.POS_Y])
 end
 
-function stringify_parameters(params)
-    pns = Dict(:cb => "C:", :rb => "R:", :kc => "kc:", :kr => "kr:",
-               :kg => "kg:", :rgf => "rgf:", :gain => "gain:"
-              )
-    trl = Dict(:cb => "", :rb => "\n", :kc => "\n", :kr => "\n",
-               :kg => "", :rgf => "", :gain => ""
-              )
-    result = ""
-    for n in [:cb, :rb, :kc, :kr, :kg, :rgf, :gain]
-        if get(params, n, nothing) != SM.default_swarm_params[n]
-            result *= "$(pns[n]) $(params[n]) $(trl[n])"
-        end
-    end
-    return result
+function radius(b)
+    c = centroid(b)
+    prm = findall(b[:,SM.PRM] .> 0.)
+    mean(hypot.(b[prm, SM.POS_X] .- c[1], b[prm, SM.POS_Y] .- c[2]))
 end
 
+function area(b)
+    return π * radius(b) ^ 2
+end
+
+function density(b)
+    return size(b)[1] / area(b)
+end
+    
 end # module

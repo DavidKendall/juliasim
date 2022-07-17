@@ -2,7 +2,7 @@ module SwarmModel
 
 using Random, JSON
 
-export compute_step, apply_step, load_swarm
+export load_swarm, compute_step, apply_step, run_simulation_for_n_steps
 
 const POS_X = 1
 const POS_Y = 2
@@ -33,15 +33,34 @@ const default_swarm_params =
         :kc => [0.15 0.15; 0.15 0.15],
         :kr => [50.0 50.0; 50.0 50.0],
         :kd => [0.0, 0.0],
-        :ka => [0.0, 0.0],
         :kg => 0.0,
+        :ka => [0.0, 0.0],
+        :ra => [0.0, 0.0],
         :scaling => "linear",
         :exp_rate => 0.2,
-        :speed => 0.05,
         :stability_factor => 0.0,
         :rgf => false,
+        :speed => 0.05,
         :gain => nothing
     )
+
+function stringify_parameters(params)
+    pns = Dict(:cb => "C:", :rb => "R:", :kc => "kc:", :kr => "kr:",
+               :kd => "kd:", :ka => "ka:", :ra => "ra:", 
+               :kg => "kg:", :rgf => "rgf:", :speed => "speed", :gain => "gain:"
+              )
+    trl = Dict(:cb => "", :rb => "\n", :kc => "\n", :kr => "\n",
+               :kd => "", :ka => "", :ra => "\n",
+               :kg => "", :rgf => "", :speed => "", :gain => ""
+              )
+    result = ""
+    for n in [:cb, :rb, :kc, :kr, :kd, :ka, :ra, :kg, :rgf, :speed, :gain]
+        if get(params, n, nothing) != default_swarm_params[n]
+            result *= "$(pns[n]) $(params[n]) $(trl[n])"
+        end
+    end
+    return result
+end
 
 function mk_rand_swarm(n; goal = [0.0 0.0], loc = 0.0, grid = 10.0, seed = nothing)
     b = zeros((n, N_COLS))
@@ -165,28 +184,13 @@ function compute_rep_linear(b, xv, yv, mag, rb, kr, p)
 end
 
 function compute_dir(b, kd, p)
-    #n_agents = size(b)[1]
-    #b[:,DIR_X:DIR_Y] .= 0.
-    #Threads.@threads for i in 1:n_agents
-    #b[i, DIR_X:DIR_Y] .+= kd[p[i]] .* (b[i, GOAL_X:GOAL_Y] .- b[i, POS_X:POS_Y])
-    #end
-    #
-    # The code below computes the same function as the code above and is
-    # about 10 times quicker
     b[:, DIR_X:DIR_Y] .= kd[p] .* (b[:, GOAL_X:GOAL_Y] .- b[:, POS_X:POS_Y])
 end
 
-function compute_adv(b, ka, p, α)
-    #n_agents = size(b)[1]
-    #Threads.@threads for i in 1:n_agents
-    #b[i, ADV_X] = ka[p[i]] * (cos(α) * b[i, DIR_X] - sin(α) * b[i, DIR_Y])
-    #b[i, ADV_Y] = ka[p[i]] * (sin(α) * b[i, DIR_X] + cos(α) * b[i, DIR_Y])
-    #end
-    #
-    # The code below computes the same function as the code above and is
-    # more than 3 times quicker
-    b[:, ADV_X] .= ka[p] .* (cos(α) .* b[:, DIR_X] .- sin(α) .* b[:, DIR_Y])
-    b[:, ADV_Y] .= ka[p] .* (sin(α) .* b[:, DIR_X] .+ cos(α) .* b[:, DIR_Y])
+function compute_adv(b, ka, α, p)
+    nd = b[:,DIR_X:DIR_Y] ./ hypot.(b[:,DIR_X], b[:,DIR_Y])
+    b[:, ADV_X] .= ka[p] .* (cos.(α[p]) .* nd[:,1] .- sin.(α[p]) .* nd[:,2])
+    b[:, ADV_Y] .= ka[p] .* (sin.(α[p]) .* nd[:,1] .+ cos.(α[p]) .* nd[:,2])
 end
 
 function update_resultant(b, stability_factor, speed)
@@ -203,7 +207,11 @@ function update_resultant(b, stability_factor, speed)
     end
 end
 
-function compute_step(b; scaling = "linear", exp_rate = 0.2, speed = 0.05, stability_factor = 0.0, cb = 3.0, rb = Array{Float64,2}([2.0 2.0; 2.0 2.0]), kc = Array{Float64,2}([0.15 0.15; 0.15 0.15]), kr = Array{Float64,2}([50.0 50.0; 50.0 50.0]), kd = [0.0, 0.0], ka = [0.0, 0.0], kg = 0.0, rgf = false, gain = nothing)
+function compute_step(b; scaling = "linear", exp_rate = 0.2, speed = 0.05, stability_factor = 0.0,
+                      cb = 3.0, rb = Array{Float64,2}([2.0 2.0; 2.0 2.0]), 
+                      kc = Array{Float64,2}([0.15 0.15; 0.15 0.15]), 
+                      kr = Array{Float64,2}([50.0 50.0; 50.0 50.0]), kd = [0.0, 0.0], 
+                      ka = [0.0, 0.0], ra = [0.0, 0.0], kg = 0.0, rgf = false, gain = nothing)
     xv, yv, mag = all_pairs_mag(b, cb)
 
     p = on_perim(b, xv, yv, mag, cb, kg, rgf)
@@ -215,13 +223,18 @@ function compute_step(b; scaling = "linear", exp_rate = 0.2, speed = 0.05, stabi
     b[:, REP_X:REP_Y] ./= max.(b[:, REP_N], 1.0)
 
     # compute the direction vectors
-    #b[:,DIR_X:DIR_Y] = kd .* (b[:,GOAL_X:GOAL_Y] .- b[:,POS_X:POS_Y])
-    compute_dir(b, kd, p)
-
-    #compute the adversarial vector
-    compute_adv(b, ka, p, π / 2)
-
-    # compute the resultant of the cohesion, repulsion and direction vectors
+    if kd == [0.0, 0.0]
+        b[:,DIR_X:DIR_Y] .= [0.0 0.0]
+    else
+        compute_dir(b, kd, p)
+    end
+    #compute the rotation vectors
+    if ka == [0.0, 0.0]
+        b[:,ADV_X:ADV_Y] .= [0.0 0.0]
+    else
+        compute_adv(b, ka, ra, p)
+    end
+    # compute the resultant of the cohesion, gap, repulsion, direction and rotation vectors
     b[:, RES_X:RES_Y] = b[:, COH_X:COH_Y] .+ b[:, GAP_X:GAP_Y] .+ b[:, REP_X:REP_Y] .+ b[:, DIR_X:DIR_Y] .+ b[:, ADV_X:ADV_Y]
 
     # either scale or normalise resultant
@@ -239,8 +252,6 @@ function apply_step(b)
     """
     Assuming the step has been computed so that RES fields are up to date, update positions
     """
-    #b[:,POS_X:POS_Y] .+= b[:,RES_X:RES_Y]
-    #round.(b[:,POS_X:POS_Y], digits=9)
     for i in 1:size(b)[1]
         b[i, POS_X] = round(b[i, POS_X] + b[i, RES_X], digits = 9)
         b[i, POS_Y] = round(b[i, POS_Y] + b[i, RES_Y], digits = 9)
@@ -252,9 +263,12 @@ function load_swarm(path = "swarm.json")
     b = mk_swarm(state["agents"]["coords"][1], state["agents"]["coords"][2])
     parameters = state["params"]
     parameters = Dict(collect(zip(map(Symbol, collect(keys(parameters))), values(parameters))))
+    parameters = merge(default_swarm_params, parameters)
     # Convert from Vector{Any} to Vector{Float64}
     parameters[:ka] = map(Float64, parameters[:ka])
     parameters[:kd] = map(Float64, parameters[:kd])
+    parameters[:ka] = map(Float64, parameters[:ka])
+    parameters[:ra] = map(Float64, parameters[:ra])
     # Convert from JSON's row-major format to Julia's column-major format
     let reformat(m) = collect(transpose(reshape(collect(Iterators.flatten(m)), 2, 2)))
         parameters[:rb] = reformat(parameters[:rb])
@@ -262,6 +276,13 @@ function load_swarm(path = "swarm.json")
         parameters[:kr] = reformat(parameters[:kr])
     end
     return b, parameters
+end
+
+function run_simulation_for_n_steps(b, parameters, n_steps=2000)
+    for i in 1:n_steps
+        compute_step(b; parameters...)
+        apply_step(b)
+    end
 end
 
 end # module

@@ -1,4 +1,6 @@
 .ipynb_checkpoints/
 *.gif
 *.pdf
+*.mp4
+src/scratch.ipynb
 
